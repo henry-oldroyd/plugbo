@@ -1,0 +1,12 @@
+/* Swap the hero logo between light/dark variants */
+.hero-logo-dark {
+  display: none;
+}
+
+[data-md-color-scheme="slate"] .hero-logo-light {
+  display: none;
+}
+
+[data-md-color-scheme="slate"] .hero-logo-dark {
+  display: inline;
+}

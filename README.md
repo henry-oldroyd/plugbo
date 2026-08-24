@@ -8,7 +8,10 @@ A modular framework for **agentic Bayesian optimization**.
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Tests](https://github.com/richardcsuwandi/plugbo/actions/workflows/tests.yml/badge.svg)](https://github.com/richardcsuwandi/plugbo/actions/workflows/tests.yml)
 
-[Blog](https://richardcsuwandi.github.io/blog/2026/plug-bo/) · [Install](#install) · [Plugins](#plugins) · [Experiments](#experiments) · [Contributing](#contributing)
+[Docs](https://richardcsuwandi.github.io/plugbo/) · [Blog](https://richardcsuwandi.github.io/blog/2026/plug-bo/) · [Install](#install) · [Plugins](#plugins) · [Experiments](#experiments) · [Contributing](#contributing)
+
+> Full documentation, including guides and a plugin reference, is at
+> **[richardcsuwandi.github.io/plugbo](https://richardcsuwandi.github.io/plugbo/)**.
 
 ![PlugBO architecture](assets/architecture.svg)
 

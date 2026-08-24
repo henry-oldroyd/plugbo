@@ -32,6 +32,7 @@ Issues = "https://github.com/richardcsuwandi/plugbo/issues"
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
 bolt = ["huggingface_hub>=0.24", "safetensors>=0.4"]
+docs = ["mkdocs-material>=9.5"]
 
 [project.scripts]
 lenz = "lenz.cli:main"

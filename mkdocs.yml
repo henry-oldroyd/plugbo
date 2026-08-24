@@ -1,0 +1,96 @@
+site_name: PlugBO
+site_description: A modular framework for agentic Bayesian optimization.
+site_url: https://richardcsuwandi.github.io/plugbo/
+repo_name: richardcsuwandi/plugbo
+repo_url: https://github.com/richardcsuwandi/plugbo
+edit_uri: edit/main/docs/
+
+copyright: Copyright &copy; 2026 Richard Cornelius Suwandi
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: white
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: deep orange
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+    - content.action.edit
+    - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+  - Concepts:
+      - Architecture: concepts/architecture.md
+      - Plugins: concepts/plugins.md
+  - Guides:
+      - Run viewer: guides/run-viewer.md
+      - Experiments: guides/experiments.md
+      - LoRA HPO (BoLT): guides/bolt.md
+  - Plugin reference:
+      - CAKE (surrogate): reference/cake.md
+      - TuRBO (region): reference/turbo.md
+      - πBO (prior): reference/pibo.md
+      - LLAMBO (sampler): reference/llambo.md
+  - Contributing: contributing.md
+  - About:
+      - Citation: about/citation.md
+      - References: about/references.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/richardcsuwandi/plugbo

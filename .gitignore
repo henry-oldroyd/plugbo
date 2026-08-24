@@ -12,7 +12,8 @@ state.json
 runs/
 results/
 .DS_Store
-docs/
 .claude/
+notes/
 *.plan.md
 scripts/local/
+site/
