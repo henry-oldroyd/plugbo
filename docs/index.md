@@ -1,6 +1,6 @@
 <p align="center">
   <img class="hero-logo-light" src="assets/logo-lockup-tagline.svg" width="420" alt="PlugBO: Modular Agentic Bayesian Optimization">
-  <img class="hero-logo-dark" src="assets/logo-lockup-dark.svg" width="260" alt="PlugBO: Modular Agentic Bayesian Optimization">
+  <img class="hero-logo-dark" src="assets/logo-lockup-tagline-dark.svg" width="420" alt="PlugBO: Modular Agentic Bayesian Optimization">
 </p>
 
 [:fontawesome-brands-github: GitHub](https://github.com/richardcsuwandi/plugbo){ .md-button }
@@ -12,12 +12,12 @@ evaluation, but its overall search strategy is usually fixed in advance.
 data, surrogate diagnostics, and natural-language context, then decides how to
 search next. As evidence accumulates, the agent can query or override backend
 suggestions and revise the surrogate, acquisition function, search bounds,
-objectives, or constraints.[^1]
+objectives, or constraints[^1].
 
-Meta's *Agentic Bayesian Optimization through Surrogate-Augmented
-Autoresearch* instantiates that idea as **Sara**, an LLM agent, calling
+Meta's [Agentic Bayesian Optimization through Surrogate-Augmented
+Autoresearch](https://arxiv.org/abs/2608.00316) instantiates that idea as **Sara**, an LLM agent, calling
 **lenz**, a [BoTorch](https://botorch.org/) backend that owns the trial log
-and posterior computation.[^6] PlugBO keeps that agent and backend, then
+and posterior computation[^6]. PlugBO keeps that agent and backend, then
 turns the backend into a plugin surface: surrogate, region, prior, and
 sampler are slots. Existing and new BO modules wrap as `lenz` verbs the agent
 can enable, inspect, or override.

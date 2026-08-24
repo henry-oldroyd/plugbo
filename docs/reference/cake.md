@@ -1,6 +1,9 @@
 # CAKE (surrogate slot)
 
-**Cite:** Suwandi et al., NeurIPS 2025.[^2] · [Paper](https://proceedings.neurips.cc/paper_files/paper/2025/file/c03a2610bca2712b984b331fd4f7bb6f-Paper-Conference.pdf) · [Code](https://github.com/richardcsuwandi/cake)
+**Cite:** Suwandi et al., NeurIPS 2025[^2].
+
+[Paper](https://proceedings.neurips.cc/paper_files/paper/2025/file/c03a2610bca2712b984b331fd4f7bb6f-Paper-Conference.pdf){ .md-button }
+[Code](https://github.com/richardcsuwandi/cake){ .md-button }
 
 Switch with `lenz set-surrogate --surrogate cake`. Each objective and
 constraint metric gets its own kernel population. BAKER ranks weighted kernel

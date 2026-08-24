@@ -1,7 +1,7 @@
 # LoRA hyperparameter optimization (BoLT)
 
 The mixed-type experiment is LoRA hyperparameter optimization on **BoLT**
-(Black-box Optimization for LLM Tasks).[^7] There is no textbook optimum to
+(Black-box Optimization for LLM Tasks)[^7]. There is no textbook optimum to
 recall — the oracle is a deterministic emulator of expensive LLM fine-tuning
 runs.
 

@@ -1,6 +1,9 @@
 # TuRBO (region slot)
 
-**Cite:** Eriksson et al., NeurIPS 2019.[^3] · [Paper](https://arxiv.org/abs/1910.01739) · [Code](https://github.com/uber-research/TuRBO)
+**Cite:** Eriksson et al., NeurIPS 2019[^3].
+
+[Paper](https://arxiv.org/abs/1910.01739){ .md-button }
+[Code](https://github.com/uber-research/TuRBO){ .md-button }
 
 Switch with `lenz set-region --policy turbo`. Subsequent `suggest` calls
 (without `--bounds` / `--around`) optimize the acquisition function inside a

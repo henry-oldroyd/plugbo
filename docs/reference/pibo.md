@@ -1,6 +1,9 @@
 # πBO (prior slot)
 
-**Cite:** Hvarfner et al., ICLR 2022.[^4] · [Paper](https://arxiv.org/abs/2204.11051) · [Code](https://github.com/piboauthors/PiBO-Spearmint)
+**Cite:** Hvarfner et al., ICLR 2022[^4].
+
+[Paper](https://arxiv.org/abs/2204.11051){ .md-button }
+[Code](https://github.com/piboauthors/PiBO-Spearmint){ .md-button }
 
 Compile a belief from context into a factorized distribution, then fold it
 into the acquisition:

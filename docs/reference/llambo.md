@@ -1,6 +1,9 @@
 # LLAMBO (sampler slot)
 
-**Cite:** Liu et al., ICLR 2024.[^5] · [Paper](https://arxiv.org/abs/2402.03921) · [Code](https://github.com/tennisonliu/LLAMBO)
+**Cite:** Liu et al., ICLR 2024[^5].
+
+[Paper](https://arxiv.org/abs/2402.03921){ .md-button }
+[Code](https://github.com/tennisonliu/LLAMBO){ .md-button }
 
 Does not replace the GP. Use it to propose candidates from natural-language
 context and recent trials, then `score` them against lenz.
