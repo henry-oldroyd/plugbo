@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import math
 import secrets
+import shutil
 import stat
 from pathlib import Path
 
@@ -491,7 +492,11 @@ def build_sandbox(
     # exact filename of the un-obfuscated answer key next door in
     # `_answers/`. `return`ing the token below is enough for callers that
     # need it.
-    (sandbox / "oracle").symlink_to(oracle_path)
+    try:
+        (sandbox / "oracle").symlink_to(oracle_path)
+    except OSError:
+        # Windows without Developer Mode / admin cannot create symlinks.
+        shutil.copy2(oracle_path, sandbox / "oracle")
 
     constraints = None
     constraint_note = ""

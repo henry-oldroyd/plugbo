@@ -65,6 +65,21 @@ def _ensure_import_shadow(sandbox: Path) -> Path:
     return shadow
 
 
+def _shell_argv(cmd: str) -> list[str]:
+    """Run `cmd` under bash. On Windows, shell=True would use cmd.exe (no ./script,
+    no single quotes), so use Git Bash explicitly (not the WSL stub in System32)."""
+    if os.name != "nt":
+        return ["/bin/sh", "-c", cmd]
+    for cand in (
+        os.environ.get("PLUGBO_BASH", ""),
+        r"C:/Program Files/Git/bin/bash.exe",
+        r"C:/Program Files (x86)/Git/bin/bash.exe",
+    ):
+        if cand and os.path.exists(cand):
+            return [cand, "-c", cmd]
+    raise RuntimeError("Git Bash not found; install Git for Windows or set PLUGBO_BASH")
+
+
 def make_bash_tool(sandbox: Path, *, block_lenz: bool = False) -> Callable[..., str]:
     def run(cmd: str) -> str:
         if block_lenz and _LENZ_RE.search(cmd or ""):
@@ -79,8 +94,8 @@ def make_bash_tool(sandbox: Path, *, block_lenz: bool = False) -> Callable[..., 
             env["PYTHONPATH"] = str(shadow) + os.pathsep + env.get("PYTHONPATH", "")
         try:
             result = subprocess.run(
-                cmd,
-                shell=True,
+                _shell_argv(cmd),
+                shell=False,
                 cwd=sandbox,
                 capture_output=True,
                 text=True,
