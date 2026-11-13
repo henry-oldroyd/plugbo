@@ -111,8 +111,69 @@ SEEDS="42 43 44 45 46" BENCHES="hartmann6" BUDGET=50 ./scripts/run_ollama_batch.
 plugbo-viz --root results/logs/ollama-batch
 ```
 
-On Windows use `.\scripts\ollama_pipeline.ps1 -Model <big-model>`; check its `-Context` default for a
-two-GPU setup. The Git Bash path and `python3` shim only matter on Windows.
+On Windows use `.\scripts\ollama_pipeline.ps1 -Model <big-model>`; on Linux/macOS use
+`./scripts/ollama_pipeline.sh --model <big-model>` (same options, see section 7). The Git Bash path and
+`python3` shim only matter on Windows.
 
 `.env` and `results/` are gitignored, so run logs stay on each machine. To compare across machines, copy the
 `results/logs/ollama-batch/<model>` folders by hand.
+
+## 7. Linux and Windows runners, and the 2x RTX 3090 setup
+
+Windows and Linux/macOS now have equivalent entry points with the same options and defaults:
+
+| | Windows (PowerShell) | Linux / macOS (bash) |
+|---|---|---|
+| Full pipeline (restart Ollama, pull, viewer, smoke, batch) | `.\scripts\ollama_pipeline.ps1` | `./scripts/ollama_pipeline.sh` |
+| Single run kind (`smoke\|batch\|synthetic\|sweep\|bolt`) | `.\scripts\ollama.ps1 <kind>` (Git Bash) | `./scripts/run_ollama_<kind>.sh`, or `ollama.ps1` under PowerShell 7 |
+
+`ollama_pipeline.sh` options: `--model`, `--context`, `--seeds "42 43"`, `--benches`, `--disclosures`,
+`--backends`, `--budget`, `--skip-smoke`, `--no-viz`, `--smoke-only` (run just the smoke test), `--help`.
+It restarts `ollama serve` with `OLLAMA_CONTEXT_LENGTH`, `OLLAMA_FLASH_ATTENTION=1` and
+`OLLAMA_KV_CACHE_TYPE=q8_0`, and refuses to run if Ollama is a systemd service (it cannot change that
+service's environment; it prints how to set it with `systemctl edit`). If `OLLAMA_MODELS` is unset and
+`/scratch/$USER` exists, models are stored in `/scratch/$USER/ollama-models`, because a networked home
+directory is usually small and backed up.
+
+**Model is chosen from the GPUs** (`scripts/_gpu_profile.sh` for bash, the top of `ollama_pipeline.ps1` for
+PowerShell; both print what they detected). Total VRAM >= 40 GiB gives the `large` profile, anything else
+(one 4090, no NVIDIA GPU, macOS) gives `small`:
+
+| Profile | Typical hardware | Default model | Context |
+|---|---|---|---|
+| large | 2x RTX 3090 (48 GB) | `deepseek-r1:32b-qwen-distill-q8_0` | 32768 |
+| small | 1x RTX 4090 (24 GB) | `qwen3.6:27b` (the model used for the 4090 runs in section 4) | 32768 |
+
+Override with `--model` / `-Model`, force a profile with `GPU_PROFILE_FORCE=large|small` / `-GpuProfile`.
+`_ollama_env.sh` (used by the single `run_ollama_*.sh` scripts) follows the same rule when `OLLAMA_MODEL` is
+unset, but keeps `qwen3-coder:30b` as its default on a `small` machine, as before.
+
+The `large` model is a Qwen2.5-32B base fine-tuned from DeepSeek-R1 (not the real 671B R1), quantised to
+int8. It was chosen so that weights, KV cache and buffers all fit in VRAM with nothing spilling to CPU RAM,
+which would make generation several times slower. Measured on 2x RTX 3090 with flash attention and a q8 KV
+cache:
+
+| Context | Loaded size | Placement | GPU memory used (each card) |
+|---|---|---|---|
+| 16384 | 36 GB | 100% GPU | ~18 GB |
+| 32768 | 39 GB | 100% GPU | ~19 GB |
+
+Generation was about 15.6 tokens/s at 16K context on a short prompt. Ollama splits layers over the two cards,
+so they take turns: the second card adds capacity, not speed. The model reports `tools` and `thinking`
+capabilities. A 70B model at 4-bit (`deepseek-r1:70b`, Llama architecture) loads but leaves almost no room for
+context, and with Ollama's default 131072 context it ran 47% on CPU.
+
+Linux setup used:
+
+```bash
+python3 -m venv /scratch/$USER/venv && source /scratch/$USER/venv/bin/activate
+PIP_CACHE_DIR=/scratch/$USER/pip-cache python -m pip install -e .
+./scripts/ollama_pipeline.sh --smoke-only        # then, without --smoke-only / with --skip-smoke, the full batch
+```
+
+Status: model loading, VRAM placement and speed above were measured; the GPU detection was tested for 2x3090,
+a simulated single 24 GB card and no GPU. The `small` profile and the `.ps1` scripts were not run on this machine.
+No batch results from this machine are recorded here yet, so section 5 still applies unchanged.
+
+Gotcha fixed: the `run_ollama_*.sh` scripts had been committed without the executable bit (from Windows), so
+`./scripts/run_ollama_smoke.sh` failed with "Permission denied" on Linux. They are now mode 100755.

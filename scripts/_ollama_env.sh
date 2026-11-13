@@ -2,8 +2,13 @@
 # and runs preflight checks. Override with env vars:
 #   OLLAMA_MODEL=qwen2.5-coder:32b  OLLAMA_BASE_URL=http://host:11434/v1
 #   NEED_BOLT=1 (also require the BoLT extras)   SKIP_PREFLIGHT=1
+# Default model: on a >=40 GiB-VRAM box (e.g. 2x RTX 3090) use the int8 32B model that fits in VRAM
+# (see _gpu_profile.sh); otherwise keep the original single-GPU default.
+source "$(dirname "${BASH_SOURCE[0]}")/_gpu_profile.sh"
+_default_model="qwen3-coder:30b"
+[ "$GPU_PROFILE" = "large" ] && _default_model="$GPU_PROFILE_MODEL"
 export PROVIDER=ollama
-export MODEL="${OLLAMA_MODEL:-qwen3-coder:30b}"
+export MODEL="${OLLAMA_MODEL:-$_default_model}"
 export BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434/v1}"
 export API_KEY="ollama"
 export EXTRA_BODY="${EXTRA_BODY-}"
