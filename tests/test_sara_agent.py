@@ -367,3 +367,66 @@ def test_text_tools_combines_with_budget_enforcement(tmp_path):
                           enforce_budget=True, text_tools=True)
     assert client.calls == 2 and result.final_message == "all done"
     assert not [e for e in result.transcript if "forced_continuation" in e]  # the fenced command counted as action
+
+
+def test_extract_bash_blocks_returns_all_in_order_with_limit():
+    from sara.agent import extract_bash_blocks
+
+    text = "plan:\n```bash\nlenz status\n```\nthen\n```bash\nlenz suggest\n```\nthen\n```bash\nlenz submit\n```"
+    assert extract_bash_blocks(text) == ["lenz status", "lenz suggest", "lenz submit"]
+    assert extract_bash_blocks(text, limit=2) == ["lenz status", "lenz suggest"]
+    assert extract_bash_blocks("<think>```bash\nx\n```</think>") == []
+
+
+def test_text_tools_all_runs_every_block_and_drops_prose_from_history(tmp_path, monkeypatch):
+    import sara.agent as agent
+
+    monkeypatch.setattr(agent, "TEXT_TOOLS_ALL", True)
+    seen = {}
+
+    class Client(LLMClient):
+        def __init__(self):
+            super().__init__(model="scripted")
+            self.calls = 0
+
+        def chat(self, messages, tools, system):
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    content="Long rambling plan. " * 50 + "\n```bash\necho one\n```\n```bash\necho two\n```",
+                    tool_calls=[], stop_reason="end_turn")
+            seen["assistant_in_history"] = [m for m in messages if m.role == "assistant"]
+            return ChatResponse(content="done", tool_calls=[], stop_reason="end_turn")
+
+    result = run_campaign(Client(), system_prompt="s", user_prompt="g", sandbox=tmp_path, text_tools=True)
+    tool_out = [e["content"] for e in result.transcript if e.get("role") == "tool"]
+    assert len(tool_out) == 2 and "one" in tool_out[0] and "two" in tool_out[1]
+    prev = seen["assistant_in_history"][0]
+    assert prev.content == "" and len(prev.tool_calls) == 2       # the rambling is not sent back to the model
+    raw = [e for e in result.transcript if e.get("raw_content")]
+    assert raw and "Long rambling plan." in raw[0]["raw_content"]  # but it is kept in the trace
+
+
+def test_text_tools_truncates_long_reply_with_no_command(tmp_path):
+    import sara.agent as agent
+
+    seen = {}
+
+    class Client(LLMClient):
+        def __init__(self):
+            super().__init__(model="scripted")
+            self.calls = 0
+
+        def chat(self, messages, tools, system):
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(content="x" * 5000, tool_calls=[], stop_reason="end_turn")
+            return ChatResponse(content="done", tool_calls=[], stop_reason="end_turn")
+
+    c = Client()
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"trials": [{"status": "observed"}]}))
+    result = run_campaign(c, system_prompt="s", user_prompt="g", sandbox=tmp_path, budget=5,
+                          enforce_budget=True, text_tools=True)
+    first = [e for e in result.transcript if e.get("role") == "assistant"][0]
+    assert len(first["content"]) <= agent.HISTORY_PROSE_CHARS + 10 and len(first["raw_content"]) == 5000

@@ -28,7 +28,14 @@ MAX_REPROMPTS = 30  # cap on forced continuations per campaign, so a stuck model
 # instead write the command in a fenced code block (observed with DeepSeek-R1 distills on Ollama: the loop
 # saw "no tool call" and the agent never ran anything). If a reply has no tool call but contains a fenced
 # shell block, run the FIRST such block as a `bash` call. Off by default = original behaviour.
-TEXT_TOOLS = os.environ.get("SARA_TEXT_TOOLS", "0") != "0"
+# SARA_TEXT_TOOLS=1 runs the first such block per reply; =all runs up to TEXT_TOOLS_MAX_BLOCKS blocks in order
+# (a reasoning model often writes its whole plan in one reply). Either way the prose around the command is
+# dropped from the conversation history (the raw reply is kept in the trace): otherwise ~1000 tokens of
+# rambling per turn fill the context window within ~25 turns and the model starts returning empty replies.
+TEXT_TOOLS = os.environ.get("SARA_TEXT_TOOLS", "0") not in ("0", "")
+TEXT_TOOLS_ALL = os.environ.get("SARA_TEXT_TOOLS", "0").lower() == "all"
+TEXT_TOOLS_MAX_BLOCKS = 3
+HISTORY_PROSE_CHARS = 400  # in text-tool mode, replies without a command are truncated to this in the history
 
 VERBOSE = os.environ.get("SARA_VERBOSE", "0") != "0"
 
@@ -36,17 +43,26 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _FENCE_RE = re.compile(r"```[ \t]*(bash|sh|shell|zsh|console)?[ \t]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
-def extract_bash_block(content: str) -> str | None:
-    """First fenced shell block in `content` (reasoning inside <think> tags is ignored), or None.
+def extract_bash_blocks(content: str, limit: int | None = None) -> list[str]:
+    """Fenced shell blocks in `content`, in order (reasoning inside <think> tags is ignored).
     Unlabelled fences count only if they look like a command rather than prose or output."""
     text = _THINK_RE.sub("", content or "")
+    out: list[str] = []
     for m in _FENCE_RE.finditer(text):
         lang, body = (m.group(1) or "").lower(), m.group(2).strip()
         if not body:
             continue
         if lang or body.split()[0] in ("lenz", "python", "python3", "cat", "ls", "cd", "echo", "./oracle", "sara"):
-            return body
-    return None
+            out.append(body)
+            if limit and len(out) >= limit:
+                break
+    return out
+
+
+def extract_bash_block(content: str) -> str | None:
+    """First fenced shell block in `content`, or None."""
+    blocks = extract_bash_blocks(content, limit=1)
+    return blocks[0] if blocks else None
 
 
 USAGE_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens")
@@ -148,12 +164,17 @@ def run_campaign(
             print(f"[agent] step {step + 1}/{max_steps} (n_observed={n_observed})", file=sys.stderr, flush=True)
 
         response = client.chat(history, tools, system_prompt)
+        raw_text = None
         if text_tools and not response.tool_calls:
-            cmd = extract_bash_block(response.content)
-            if cmd:  # treat the fenced command as a bash tool call, so the loop and history stay consistent
-                response = replace(response, tool_calls=[ToolCall(id=f"text-{step}", name="bash", arguments={"cmd": cmd})])
+            cmds = extract_bash_blocks(response.content, limit=TEXT_TOOLS_MAX_BLOCKS if TEXT_TOOLS_ALL else 1)
+            raw_text = response.content or ""
+            if cmds:  # treat the fenced command(s) as bash tool calls, so the loop and history stay consistent
+                response = replace(response, content="", tool_calls=[
+                    ToolCall(id=f"text-{step}-{i}", name="bash", arguments={"cmd": c}) for i, c in enumerate(cmds)])
                 if VERBOSE:
-                    print(f"[agent] text tool call: {cmd[:120]!r}", file=sys.stderr, flush=True)
+                    print(f"[agent] text tool call(s): {[c[:80] for c in cmds]}", file=sys.stderr, flush=True)
+            elif len(raw_text) > HISTORY_PROSE_CHARS:
+                response = replace(response, content=raw_text[:HISTORY_PROSE_CHARS] + " [...]")
         history.append(Message(role="assistant", content=response.content, tool_calls=response.tool_calls))
         log(
             {
@@ -161,6 +182,7 @@ def run_campaign(
                 "content": response.content,
                 "tool_calls": [{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in response.tool_calls],
                 "usage": response.usage,
+                **({"raw_content": raw_text} if raw_text is not None and raw_text != response.content else {}),
             }
         )
         if response.usage:

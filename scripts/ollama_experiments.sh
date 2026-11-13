@@ -135,6 +135,7 @@ fi
 # ---------------------------------------------------------------- environment shared by all modes
 # (A _worker inherits all of this, already exported, from the parent; do not reset it from defaults.)
 if [ "$MODE" != "_worker" ]; then
+  [ -n "$TEXT_TOOLS" ] || TEXT_TOOLS="${SARA_TEXT_TOOLS:-}"   # an already-exported SARA_TEXT_TOOLS (e.g. "all") wins
   [ -n "$TEXT_TOOLS" ] || { [ "$MODE" = shared ] && TEXT_TOOLS=1 || TEXT_TOOLS=0; }
   export PROVIDER=ollama API_KEY=ollama EXTRA_BODY="" KERNEL_LLM_API_KEY_ENV="" SARA_ENFORCE_BUDGET="$ENFORCE" SARA_TEXT_TOOLS="$TEXT_TOOLS"
   export BASE_URL="http://127.0.0.1:${BASE_PORT}/v1" MODEL="${MODEL_OVERRIDE:-placeholder}"
