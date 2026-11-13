@@ -204,3 +204,48 @@ No batch results from this machine are recorded here yet, so section 5 still app
 
 Gotcha fixed: the `run_ollama_*.sh` scripts had been committed without the executable bit (from Windows), so
 `./scripts/run_ollama_smoke.sh` failed with "Permission denied" on Linux. They are now mode 100755.
+
+## 8. Ordered experiment queue on a multi-GPU box (`scripts/ollama_experiments.sh`, Linux)
+
+Vanilla BO vs the sara-lenz agent on a diverse benchmark subset, several seeds, worked through by the GPUs:
+
+```bash
+source /scratch/$USER/venv/bin/activate && python -m pip install -e '.[plots]'   # plots need matplotlib
+./scripts/ollama_experiments.sh --help
+./scripts/ollama_experiments.sh parallel --plan   # look at the queue first (starts nothing)
+./scripts/ollama_experiments.sh parallel          # one Ollama server per GPU, qwen3.6:27b, each GPU is a worker
+./scripts/ollama_experiments.sh shared            # one server over all GPUs, deepseek-r1:32b (see caveat below)
+./scripts/ollama_experiments.sh plots             # redraw plots (also overlays models in compare-models.html)
+```
+
+**The queue** (the same in both modes): two tiers, each seed-major. Tier 1 = core benchmarks `branin hartmann6
+ackley10 rosenbrock6 rastrigin6 michalewicz5`; tier 2 = `shekel six_hump_camel levy10 styblinski_tang10 griewank10
+constrained_hartmann6` (`--all-extended` for every other synthetic benchmark, `--no-extended` to skip). Within a
+tier: seed 42 on every benchmark, then seed 43 on every benchmark, and so on (default 5 seeds, budget 100). So one
+pass gives a result for every core benchmark and each further pass tightens the uncertainty. Each job is one
+(seed, benchmark, backend) leg; GPU workers take the sara-lenz legs in order, vanilla legs (no LLM calls) go to
+`--cpu-workers` CPU workers (default 2). Stop with Ctrl-C and rerun to resume; legs left "running" or "failed" by
+an interrupted run are redone (the stale "running" marker is what made `ollama_agent_rerun` skip a seed earlier).
+
+**Plots** (`benchmarks/plot_seeds.py`, matplotlib): per benchmark a log-regret chart with every seed as a faint
+line, the median across seeds, and a 25-75% band, plus a table. Early-stopped runs are not padded; the median is
+drawn only while at least half the runs reached that evaluation. Output `<model>/seeds.html` (+ PNGs, `seeds.json`),
+refreshed every ~5 minutes while the queue runs.
+
+**Measured (tiny test: branin + hartmann6, 2 seeds, budget 12, `parallel`)**: both 3090s each held the 17 GB
+`qwen3.6:27b` at 32768 context, 100% on GPU, ~18.8 GB used per card; all 8 legs finished in ~15 minutes
+(an agent leg of 12 evaluations ~6.5 min; one vanilla leg ~2.4 min, and it slows as evaluations grow, hence the
+extra CPU workers). Budget enforcement fired and worked (e.g. continued from 11/12 to 12/12). Full-size timings
+(budget 100) are not measured yet.
+
+**Caveat: `deepseek-r1:32b-qwen-distill-q8_0` does not work well with this agent.** It fits both GPUs fine (39 GB,
+100% on GPU) but does not emit structured tool calls; it writes commands in a fenced code block instead, so the
+agent loop saw "no tool call" and nothing ran (budget enforcement just looped it). `sara/agent.py` now has an
+opt-in `SARA_TEXT_TOOLS=1` / `text_tools=True` that runs the first fenced shell block of a reply as a `bash` call
+(`ollama_experiments.sh shared` turns it on; `--no-text-tools` to disable). With it the commands run, but the
+model re-plans the whole recipe in prose each turn (~1000 tokens, over a minute at ~15 tokens/s), runs only the
+first block, and in a 10-evaluation test it kept alternating `lenz status` / `lenz suggest` without ever
+evaluating (stopped by hand at 3/10). So `shared` with this model is currently not a usable experiment. To use
+both GPUs for one model, pass a model with native tool calling: `./scripts/ollama_experiments.sh shared --model
+<tag>` (a dense ~32B Qwen at int8 would have the same ~39 GB footprint; not tried, tag unverified).
+

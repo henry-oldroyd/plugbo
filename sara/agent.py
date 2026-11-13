@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from llm.base import LLMClient, Message
+from llm.base import LLMClient, Message, ToolCall
 from .tools import build_tools
 
 MAX_STEPS = 400  # safety cap on computational actions; the evaluation budget is self-regulated via the prompt
@@ -23,7 +24,29 @@ BUDGET_NUDGE_FACTOR = 1.5
 ENFORCE_BUDGET = os.environ.get("SARA_ENFORCE_BUDGET", "0") != "0"
 MAX_REPROMPTS = 30  # cap on forced continuations per campaign, so a stuck model cannot loop forever
 
+# Opt-in (SARA_TEXT_TOOLS=1 or text_tools=True) for models that do not emit structured tool calls and
+# instead write the command in a fenced code block (observed with DeepSeek-R1 distills on Ollama: the loop
+# saw "no tool call" and the agent never ran anything). If a reply has no tool call but contains a fenced
+# shell block, run the FIRST such block as a `bash` call. Off by default = original behaviour.
+TEXT_TOOLS = os.environ.get("SARA_TEXT_TOOLS", "0") != "0"
+
 VERBOSE = os.environ.get("SARA_VERBOSE", "0") != "0"
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_FENCE_RE = re.compile(r"```[ \t]*(bash|sh|shell|zsh|console)?[ \t]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+def extract_bash_block(content: str) -> str | None:
+    """First fenced shell block in `content` (reasoning inside <think> tags is ignored), or None.
+    Unlabelled fences count only if they look like a command rather than prose or output."""
+    text = _THINK_RE.sub("", content or "")
+    for m in _FENCE_RE.finditer(text):
+        lang, body = (m.group(1) or "").lower(), m.group(2).strip()
+        if not body:
+            continue
+        if lang or body.split()[0] in ("lenz", "python", "python3", "cat", "ls", "cd", "echo", "./oracle", "sara"):
+            return body
+    return None
 
 
 USAGE_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens")
@@ -92,9 +115,12 @@ def run_campaign(
     max_steps: int = MAX_STEPS,
     block_lenz: bool = False,
     enforce_budget: bool | None = None,
+    text_tools: bool | None = None,
 ) -> RunResult:
     if enforce_budget is None:
         enforce_budget = ENFORCE_BUDGET
+    if text_tools is None:
+        text_tools = TEXT_TOOLS
     reprompts = 0
     tools, handlers = build_tools(sandbox, block_lenz=block_lenz)
     history: list[Message] = [Message(role="user", content=user_prompt)]
@@ -122,6 +148,12 @@ def run_campaign(
             print(f"[agent] step {step + 1}/{max_steps} (n_observed={n_observed})", file=sys.stderr, flush=True)
 
         response = client.chat(history, tools, system_prompt)
+        if text_tools and not response.tool_calls:
+            cmd = extract_bash_block(response.content)
+            if cmd:  # treat the fenced command as a bash tool call, so the loop and history stay consistent
+                response = replace(response, tool_calls=[ToolCall(id=f"text-{step}", name="bash", arguments={"cmd": cmd})])
+                if VERBOSE:
+                    print(f"[agent] text tool call: {cmd[:120]!r}", file=sys.stderr, flush=True)
         history.append(Message(role="assistant", content=response.content, tool_calls=response.tool_calls))
         log(
             {

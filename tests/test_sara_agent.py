@@ -317,3 +317,53 @@ def test_explicit_enforce_budget_argument_overrides_environment_default(tmp_path
     off = ScriptedClient([_final()])
     run_campaign(off, system_prompt="s", user_prompt="g", sandbox=tmp_path, budget=5, enforce_budget=False)
     assert off.calls == 1  # explicit False beats the env default
+
+
+# --- text-mode tool calls (SARA_TEXT_TOOLS / text_tools) --------------------------------------------------
+
+
+def test_extract_bash_block():
+    from sara.agent import extract_bash_block
+
+    assert extract_bash_block("run:\n```bash\nlenz status --state ./state.json\n```\nthen wait") == "lenz status --state ./state.json"
+    assert extract_bash_block("```\nlenz suggest --state ./state.json\n```") == "lenz suggest --state ./state.json"  # unlabelled, command-like
+    assert extract_bash_block("```\nsome output 1 2 3\n```") is None  # unlabelled prose/output
+    assert extract_bash_block("<think>try ```bash\nrm -rf x\n```</think>no command here") is None  # reasoning ignored
+    assert extract_bash_block("```bash\nfirst\n```\n```bash\nsecond\n```") == "first"  # only the first block
+    assert extract_bash_block("") is None and extract_bash_block("plain text") is None
+
+
+def test_text_tools_runs_fenced_command_as_bash_call(tmp_path):
+    responses = [
+        ChatResponse(content="Let me check.\n```bash\necho hello-from-text\n```", tool_calls=[], stop_reason="end_turn"),
+        ChatResponse(content="done", tool_calls=[], stop_reason="end_turn"),
+    ]
+    client = ScriptedClient(responses)
+    result = run_campaign(client, system_prompt="s", user_prompt="g", sandbox=tmp_path, text_tools=True)
+    tool_entries = [e for e in result.transcript if e.get("role") == "tool"]
+    assert len(tool_entries) == 1 and "hello-from-text" in tool_entries[0]["content"]
+    assert result.final_message == "done" and client.calls == 2
+
+
+def test_text_tools_off_by_default_so_fenced_command_is_just_text(tmp_path, monkeypatch):
+    import sara.agent as agent
+
+    monkeypatch.setattr(agent, "TEXT_TOOLS", False)
+    client = ScriptedClient([ChatResponse(content="```bash\necho hi\n```", tool_calls=[], stop_reason="end_turn")])
+    result = run_campaign(client, system_prompt="s", user_prompt="g", sandbox=tmp_path)
+    assert client.calls == 1 and not [e for e in result.transcript if e.get("role") == "tool"]
+
+
+def test_text_tools_combines_with_budget_enforcement(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"trials": [{"status": "observed"} for _ in range(1)]}))
+    cmd = "python3 -c \"import json;json.dump({'trials':[{'status':'observed'}]*3},open('state.json','w'))\""
+    responses = [
+        ChatResponse(content="I will start:\n```bash\n" + cmd + "\n```", tool_calls=[], stop_reason="end_turn"),
+        ChatResponse(content="all done", tool_calls=[], stop_reason="end_turn"),
+    ]
+    client = ScriptedClient(responses)
+    result = run_campaign(client, system_prompt="s", user_prompt="g", sandbox=tmp_path, budget=3,
+                          enforce_budget=True, text_tools=True)
+    assert client.calls == 2 and result.final_message == "all done"
+    assert not [e for e in result.transcript if "forced_continuation" in e]  # the fenced command counted as action
