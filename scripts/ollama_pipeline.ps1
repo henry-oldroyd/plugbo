@@ -10,11 +10,19 @@
 
   If PowerShell blocks scripts:  powershell -ExecutionPolicy Bypass -File scripts\ollama_pipeline.ps1 -Background
 
+  Windows only (Git Bash + Start-Process). On Linux/macOS use  ./scripts/ollama_pipeline.sh  (same options).
+  Default model is chosen from the detected GPUs (same rule as scripts/_gpu_profile.sh):
+    >= 40 GiB total VRAM (e.g. 2x RTX 3090): deepseek-r1:32b-qwen-distill-q8_0, i.e. Qwen2.5-32B (DeepSeek-R1
+      distill) at int8. At -Context 32768 with the q8 KV cache it loads as 39 GB, 100% GPU, ~19 GB per card.
+    otherwise (e.g. one 24 GB RTX 4090): qwen3.6:27b.
+  Pass -Model to override, or -GpuProfile large|small to force a profile.
+
   NOTE: this restarts Ollama (so the context / KV-cache settings take effect).
   When it finishes the model is unloaded from VRAM; `ollama serve` is left running.
 #>
 param(
-  [string]$Model = "qwen3.6:27b",
+  [string]$Model = "",                 # empty = pick from the detected GPUs
+  [ValidateSet("", "large", "small")][string]$GpuProfile = "",
   [int]$Context = 32768,
   [int[]]$Seeds = @(42, 43, 44, 45, 46),
   [string[]]$Benches = @("hartmann6"),
@@ -30,6 +38,22 @@ $repo = Split-Path $PSScriptRoot -Parent
 Set-Location $repo
 New-Item -ItemType Directory -Force "results\logs" | Out-Null
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+
+# --- Pick the model from the GPUs present (mirror of scripts/_gpu_profile.sh) -------------
+$totalMiB = 0; $gpuCount = 0
+if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+  try {
+    foreach ($line in (& nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null)) {
+      if ("$line".Trim() -match '^\d+$') { $totalMiB += [int]"$line".Trim(); $gpuCount++ }
+    }
+  } catch { }
+}
+$gpuTier = if ($totalMiB -ge 40960) { "large" } else { "small" }
+if ($GpuProfile) { $gpuTier = $GpuProfile }
+$tierModel = if ($gpuTier -eq "large") { "deepseek-r1:32b-qwen-distill-q8_0" } else { "qwen3.6:27b" }
+if (-not $Model) { $Model = $tierModel }
+Write-Host "Detected: $gpuCount GPU(s), $([math]::Floor($totalMiB / 1024)) GiB total VRAM -> profile '$gpuTier'"
+Write-Host "Using:    model=$Model context=$Context"
 
 # --- Relaunch hidden in the background, logging to a file ---------------------------------
 if ($Background) {
