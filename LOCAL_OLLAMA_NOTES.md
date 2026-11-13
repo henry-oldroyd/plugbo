@@ -82,7 +82,8 @@ seeds 43 and 44 were still running when this was written.
 - It works end-to-end locally: preflight, smoke test and batch run, results readable in `plugbo-viz`.
 - **The sara-lenz agent stops at about 13-14 evaluations out of 50 on both models**
   (and at 14/20 in run 1). With a 32K context and the bigger model it still happened, so a too-small
-  context is **not** confirmed as the cause. Why the agent ends its run early is unexplained. Read
+  context is **not** confirmed as the cause. Why it ends early was unexplained when this section was written; it is diagnosed and mitigated in
+  section 7 ("Early stopping"). Read
   the agent trace in `plugbo-viz` for a stopped run before changing models again.
 - Because of that, vanilla vs sara-lenz is not a fair comparison yet: vanilla used its full 50 evaluations,
   the agent about 14. Three seeds is also far too few to say anything about which method is better.
@@ -125,6 +126,7 @@ Windows and Linux/macOS now have equivalent entry points with the same options a
 | | Windows (PowerShell) | Linux / macOS (bash) |
 |---|---|---|
 | Full pipeline (restart Ollama, pull, viewer, smoke, batch) | `.\scripts\ollama_pipeline.ps1` | `./scripts/ollama_pipeline.sh` |
+| Agent-only rerun with budget enforcement | `.\scripts\ollama_agent_rerun.ps1` | `./scripts/ollama_agent_rerun.sh` |
 | Single run kind (`smoke\|batch\|synthetic\|sweep\|bolt`) | `.\scripts\ollama.ps1 <kind>` (Git Bash) | `./scripts/run_ollama_<kind>.sh`, or `ollama.ps1` under PowerShell 7 |
 
 `ollama_pipeline.sh` options: `--model`, `--context`, `--seeds "42 43"`, `--benches`, `--disclosures`,
@@ -135,8 +137,8 @@ service's environment; it prints how to set it with `systemctl edit`). If `OLLAM
 `/scratch/$USER` exists, models are stored in `/scratch/$USER/ollama-models`, because a networked home
 directory is usually small and backed up.
 
-**Model is chosen from the GPUs** (`scripts/_gpu_profile.sh` for bash, the top of `ollama_pipeline.ps1` for
-PowerShell; both print what they detected). Total VRAM >= 40 GiB gives the `large` profile, anything else
+**Model is chosen from the GPUs** (`scripts/_gpu_profile.sh` for bash, `scripts/_gpu_profile.ps1` for
+PowerShell; the scripts print what they detected). Total VRAM >= 40 GiB gives the `large` profile, anything else
 (one 4090, no NVIDIA GPU, macOS) gives `small`:
 
 | Profile | Typical hardware | Default model | Context |
@@ -162,6 +164,31 @@ Generation was about 15.6 tokens/s at 16K context on a short prompt. Ollama spli
 so they take turns: the second card adds capacity, not speed. The model reports `tools` and `thinking`
 capabilities. A 70B model at 4-bit (`deepseek-r1:70b`, Llama architecture) loads but leaves almost no room for
 context, and with Ollama's default 131072 context it ran 47% on CPU.
+
+### Early stopping of the sara-lenz agent, and how to override it
+
+Diagnosis (commit `e0febb8`): the agent loop treated any model reply with **no tool call** as its final
+report, including an *empty* completion, so runs ended at ~7-17 of 50 evaluations. The fix is opt-in in
+`sara/agent.py`: with `SARA_ENFORCE_BUDGET=1` (or `run_campaign(..., enforce_budget=True)`), a no-tool-call
+reply while the evaluation budget is not used up gets a "you have used N of B evaluations, continue" message
+instead of ending the run. It is capped at 30 forced continuations per run, so a stuck model cannot loop
+forever, and an explicit `enforce_budget` argument beats the environment default. In `sara/agent.py` itself
+it is **off** by default (original behaviour); `run_ollama_batch.sh` turns it **on**, which is what all the
+scripts below inherit. To override:
+
+| What | Enforcement ON (default in these scripts) | Original early-stopping behaviour |
+|---|---|---|
+| Linux pipeline | `./scripts/ollama_pipeline.sh` (or `--enforce-budget`) | `./scripts/ollama_pipeline.sh --no-enforce-budget` |
+| Windows pipeline | `.\scripts\ollama_pipeline.ps1` | `.\scripts\ollama_pipeline.ps1 -NoEnforce` |
+| Agent-only rerun, Linux | `./scripts/ollama_agent_rerun.sh` | `./scripts/ollama_agent_rerun.sh --no-enforce` |
+| Agent-only rerun, Windows | `.\scripts\ollama_agent_rerun.ps1` | `.\scripts\ollama_agent_rerun.ps1 -NoEnforce` |
+| Any script | `SARA_ENFORCE_BUDGET=1` | `SARA_ENFORCE_BUDGET=0` |
+
+Compare runs with and without enforcement before trusting vanilla-vs-agent numbers: forced continuations are
+logged (`forced_continuation` in the agent trace, `[agent] forced continuation` on stderr). The agent-only
+rerun scripts redo just the `sara-lenz` backend (`--force` / `-Force` to redo finished legs). Enforcement was
+unit-tested (`tests/test_sara_agent.py`); it has **not** yet been run against the 32B model on the 2x3090
+machine, so whether it actually fixes the early stopping there is unconfirmed.
 
 Linux setup used:
 

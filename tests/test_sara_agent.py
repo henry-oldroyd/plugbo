@@ -229,3 +229,91 @@ def test_bash_tool_runs_in_sandbox(tmp_path):
     _, handlers = build_tools(tmp_path)
     out = handlers["bash"]("pwd")
     assert str(tmp_path.resolve()) in out
+
+
+# --- early-stopping override (SARA_ENFORCE_BUDGET / enforce_budget) -------------------------------------
+
+
+def _write_observed(sandbox, n):
+    (sandbox / "state.json").write_text(json.dumps({"trials": [{"status": "observed"} for _ in range(n)]}))
+
+
+def _final(text="final report"):
+    return ChatResponse(content=text, tool_calls=[], stop_reason="end_turn")
+
+
+def test_budget_not_enforced_by_default_agent_may_stop_early(tmp_path, monkeypatch):
+    import sara.agent as agent
+
+    monkeypatch.setattr(agent, "ENFORCE_BUDGET", False)
+    _write_observed(tmp_path, 3)
+    client = ScriptedClient([_final()])
+    result = run_campaign(client, system_prompt="sys", user_prompt="go", sandbox=tmp_path, budget=10)
+    assert client.calls == 1
+    assert result.final_message == "final report"
+    assert not any("forced_continuation" in e for e in result.transcript)
+
+
+def test_enforce_budget_pushes_agent_on_until_cap(tmp_path, monkeypatch):
+    import sara.agent as agent
+
+    monkeypatch.setattr(agent, "MAX_REPROMPTS", 2)
+    _write_observed(tmp_path, 3)  # 3 of 10 used, and the scripted model never evaluates anything
+    client = ScriptedClient([_final("early 1"), _final("early 2"), _final("early 3")])
+    result = run_campaign(client, system_prompt="sys", user_prompt="go", sandbox=tmp_path, budget=10, enforce_budget=True)
+
+    forced = [e for e in result.transcript if "forced_continuation" in e]
+    assert len(forced) == 2  # capped, so a stuck model cannot loop forever
+    assert "3 of 10 evaluations" in forced[0]["content"]
+    assert client.calls == 3
+    assert result.final_message == "early 3"  # after the cap the run is allowed to end
+
+
+def test_enforce_budget_run_completes_once_budget_is_used(tmp_path):
+    state = tmp_path / "state.json"
+
+    class Client(LLMClient):
+        def __init__(self):
+            super().__init__(model="scripted")
+            self.calls = 0
+
+        def chat(self, messages, tools, system):
+            self.calls += 1
+            if self.calls == 1:  # model gives up with 1/3 evaluations done
+                return _final("I am done")
+            if self.calls == 2:  # after being told to continue it evaluates the rest
+                state.write_text(json.dumps({"trials": [{"status": "observed"} for _ in range(3)]}))
+                return ChatResponse(
+                    content="", tool_calls=[ToolCall(id="1", name="bash", arguments={"cmd": "echo ok"})], stop_reason="tool_use"
+                )
+            return _final("all done")
+
+    _write_observed(tmp_path, 1)
+    client = Client()
+    result = run_campaign(client, system_prompt="sys", user_prompt="go", sandbox=tmp_path, budget=3, enforce_budget=True)
+    assert client.calls == 3
+    assert result.final_message == "all done"
+    assert len([e for e in result.transcript if "forced_continuation" in e]) == 1
+
+
+def test_enforce_budget_lets_agent_finish_when_budget_is_spent(tmp_path):
+    _write_observed(tmp_path, 10)
+    client = ScriptedClient([_final()])
+    result = run_campaign(client, system_prompt="sys", user_prompt="go", sandbox=tmp_path, budget=10, enforce_budget=True)
+    assert client.calls == 1
+    assert not any("forced_continuation" in e for e in result.transcript)
+
+
+def test_explicit_enforce_budget_argument_overrides_environment_default(tmp_path, monkeypatch):
+    import sara.agent as agent
+
+    monkeypatch.setattr(agent, "ENFORCE_BUDGET", True)  # what SARA_ENFORCE_BUDGET=1 sets
+    monkeypatch.setattr(agent, "MAX_REPROMPTS", 1)
+    _write_observed(tmp_path, 2)
+
+    on = run_campaign(ScriptedClient([_final(), _final()]), system_prompt="s", user_prompt="g", sandbox=tmp_path, budget=5)
+    assert len([e for e in on.transcript if "forced_continuation" in e]) == 1  # env default applied
+
+    off = ScriptedClient([_final()])
+    run_campaign(off, system_prompt="s", user_prompt="g", sandbox=tmp_path, budget=5, enforce_budget=False)
+    assert off.calls == 1  # explicit False beats the env default

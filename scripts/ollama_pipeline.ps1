@@ -17,6 +17,9 @@
     otherwise (e.g. one 24 GB RTX 4090): qwen3.6:27b.
   Pass -Model to override, or -GpuProfile large|small to force a profile.
 
+  Early stopping: the sara-lenz agent used to end runs at ~7-17 of 50 evaluations. Budget enforcement
+  (SARA_ENFORCE_BUDGET, see sara/agent.py) is on by default for these scripts; -NoEnforce turns it off.
+
   NOTE: this restarts Ollama (so the context / KV-cache settings take effect).
   When it finishes the model is unloaded from VRAM; `ollama serve` is left running.
 #>
@@ -31,6 +34,7 @@ param(
   [int]$Budget = 50,
   [switch]$SkipSmoke,
   [switch]$NoViz,
+  [switch]$NoEnforce,                  # let the agent end a run before the budget is used (old behaviour)
   [switch]$Background
 )
 $ErrorActionPreference = "Stop"
@@ -39,21 +43,16 @@ Set-Location $repo
 New-Item -ItemType Directory -Force "results\logs" | Out-Null
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 
-# --- Pick the model from the GPUs present (mirror of scripts/_gpu_profile.sh) -------------
-$totalMiB = 0; $gpuCount = 0
-if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
-  try {
-    foreach ($line in (& nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null)) {
-      if ("$line".Trim() -match '^\d+$') { $totalMiB += [int]"$line".Trim(); $gpuCount++ }
-    }
-  } catch { }
-}
-$gpuTier = if ($totalMiB -ge 40960) { "large" } else { "small" }
-if ($GpuProfile) { $gpuTier = $GpuProfile }
-$tierModel = if ($gpuTier -eq "large") { "deepseek-r1:32b-qwen-distill-q8_0" } else { "qwen3.6:27b" }
-if (-not $Model) { $Model = $tierModel }
-Write-Host "Detected: $gpuCount GPU(s), $([math]::Floor($totalMiB / 1024)) GiB total VRAM -> profile '$gpuTier'"
+# --- Pick the model from the GPUs present (see scripts/_gpu_profile.ps1) ------------------
+. "$PSScriptRoot\_gpu_profile.ps1"
+$gpu = Get-GpuProfile -Force $GpuProfile
+if (-not $Model) { $Model = $gpu.Model }
+Write-Host "Detected: $($gpu.Gpus) GPU(s), $($gpu.TotalGiB) GiB total VRAM -> profile '$($gpu.Tier)'"
 Write-Host "Using:    model=$Model context=$Context"
+
+# Early-stopping override for the sara-lenz agent (sara/agent.py). The batch script turns budget
+# enforcement ON by default; -NoEnforce restores the original behaviour (agent may end a run early).
+if ($NoEnforce) { $env:SARA_ENFORCE_BUDGET = "0" }
 
 # --- Relaunch hidden in the background, logging to a file ---------------------------------
 if ($Background) {
@@ -65,6 +64,7 @@ if ($Background) {
     "-Disclosures", ($Disclosures -join ","), "-Backends", ($Backends -join ","))
   if ($SkipSmoke) { $argsList += "-SkipSmoke" }
   if ($NoViz) { $argsList += "-NoViz" }
+  if ($NoEnforce) { $argsList += "-NoEnforce" }
   $p = Start-Process $ps -ArgumentList $argsList -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $log -RedirectStandardError "$log.err"
   Write-Host "Started in background (pid $($p.Id)).`n  log:  Get-Content '$log' -Wait`n  errs: $log.err`n  stop: Stop-Process -Id $($p.Id) -Force   (then: ollama stop $Model)"
