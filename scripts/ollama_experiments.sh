@@ -35,6 +35,8 @@
 #   --model M     override the mode's model      --context N  Ollama context (32768)    synthetic benchmark
 #   --gpus "0 1"  GPUs to use (default all)      --threads N  CPU threads per job (8)
 #   --cpu-workers N   parallel workers for the vanilla legs (default 2; they only use CPU)
+#   --label NAME      write to <model>_NAME instead of <model>, e.g. to keep a second arm (such as
+#                     --no-enforce-budget) apart from the main one      --agent-only  skip the vanilla legs
 #   --base-port N first Ollama port (11434)      --no-enforce-budget  let the agent end runs early
 #   --text-tools / --no-text-tools   run a fenced ```bash block in a reply as a tool call (SARA_TEXT_TOOLS).
 #                 Default: ON for `shared` (deepseek-r1 distills write commands as text instead of making
@@ -77,6 +79,8 @@ CONTEXT=32768
 GPUS=""
 THREADS=8
 CPU_WORKERS=2
+LABEL="${LABEL:-}"
+AGENT_ONLY=""
 BASE_PORT=11434
 ENFORCE=1
 TEXT_TOOLS=""
@@ -95,6 +99,8 @@ while [ $# -gt 0 ]; do
     --gpus)     GPUS="$2"; PASSTHRU+=("$1" "$2"); shift 2 ;;
     --threads)  THREADS="$2"; PASSTHRU+=("$1" "$2"); shift 2 ;;
     --cpu-workers) CPU_WORKERS="$2"; PASSTHRU+=("$1" "$2"); shift 2 ;;
+    --label)    LABEL="$2"; PASSTHRU+=("$1" "$2"); shift 2 ;;
+    --agent-only) AGENT_ONLY=1; PASSTHRU+=("$1"); shift ;;
     --base-port) BASE_PORT="$2"; PASSTHRU+=("$1" "$2"); shift 2 ;;
     --no-enforce-budget) ENFORCE=0; PASSTHRU+=("$1"); shift ;;
     --text-tools)    TEXT_TOOLS=1; PASSTHRU+=("$1"); shift ;;
@@ -163,7 +169,7 @@ case "$MODE" in
   _worker)  MODEL_TAG="$MODEL"; N_SERVERS=0 ;;
 esac
 export MODEL="$MODEL_TAG"
-TAG="${MODEL_TAG//[:\/]/_}"
+TAG="${MODEL_TAG//[:\/]/_}${LABEL:+_$LABEL}"
 BASE="$OUT/$TAG"
 
 # ---------------------------------------------------------------- worker (internal)
@@ -201,6 +207,7 @@ for tier in core extended; do
   for seed in $SEEDS; do                 # seed-major: every benchmark once for a seed, then the next seed
     for bench in $tier_benches; do
       for backend in vanilla sara-lenz; do
+        [ "$backend" = vanilla ] && [ -n "$AGENT_ONLY" ] && continue
         st="$(condition_status "$BASE/${bench}-blind/seed${seed}/$backend" "$seed")"
         t_total=$((t_total + 1)); [ "$st" = completed ] || t_todo=$((t_todo + 1))
         if [ "$backend" = vanilla ]; then echo "$tier $seed $bench $backend" >> "$RUN_DIR/jobs.cpu"
@@ -284,7 +291,7 @@ done
 nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv,noheader | sed 's/^/GPU /'
 
 # ---------------------------------------------------------------- workers
-export RUN_DIR BASE BUDGET OUT
+export RUN_DIR BASE BUDGET OUT LABEL
 export OMP_NUM_THREADS="$THREADS" MKL_NUM_THREADS="$THREADS" OPENBLAS_NUM_THREADS="$THREADS"
 echo; echo "=== running $todo legs ($(date +%H:%M:%S)) ===   logs: tail -f $RUN_DIR/worker-*.log"
 WORKER_PIDS=()
@@ -313,6 +320,7 @@ refresh_plots
 echo; echo "=== finished ($(date +%H:%M:%S)) ==="
 other=0; completed=0
 for seed in $SEEDS; do for bench in $BENCHES $EXT_BENCHES; do for backend in vanilla sara-lenz; do
+  [ "$backend" = vanilla ] && [ -n "$AGENT_ONLY" ] && continue
   st="$(condition_status "$BASE/${bench}-blind/seed${seed}/$backend" "$seed")"
   if [ "$st" = completed ]; then completed=$((completed + 1)); else other=$((other + 1)); echo "  not completed: $bench $backend seed=$seed ($st)"; fi
 done; done; done

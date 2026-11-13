@@ -54,14 +54,21 @@ def collect_runs(root: Path) -> dict[str, dict[str, dict[int, list[float]]]]:
     return out
 
 
-def merge_roots(roots: list[Path]) -> dict[str, dict[str, dict[int, list[float]]]]:
+def merge_roots(roots: list[Path], names: dict[str, str] | None = None) -> dict[str, dict[str, dict[int, list[float]]]]:
     """Combine several model roots. With one root labels are plain backend names. With several, `vanilla`
-    keeps its name (taken from the first root that has it) and other backends become 'backend [model]'."""
+    keeps its name (taken from the first root that has it) and other backends become 'backend [model]'.
+    `names` maps a root directory name (or "vanilla") to the label to show instead."""
+    names = names or {}
     merged: dict[str, dict[str, dict[int, list[float]]]] = {}
     for root in roots:
         for group, backends in collect_runs(root).items():
             for backend, runs in backends.items():
-                label = backend if (len(roots) == 1 or backend == "vanilla") else f"{backend} [{root.name}]"
+                if backend == "vanilla":
+                    label = names.get("vanilla", "vanilla")
+                elif len(roots) == 1:
+                    label = names.get(root.name, backend)
+                else:
+                    label = names.get(root.name, f"{backend} [{root.name}]")
                 if backend == "vanilla" and label in merged.get(group, {}):
                     continue
                 merged.setdefault(group, {})[label] = runs
@@ -95,7 +102,13 @@ def aggregate(runs: dict[int, list[float]]) -> dict:
     n_shown = sum(1 for c in counts if c * 2 >= n_runs)  # counts only shrink, so this is a prefix
     finals = [t[-1] for t in traces]
     lengths = [len(t) for t in traces]
+    # Mean +- standard error needs every run at every index, so a run that stopped early is carried forward at
+    # its last best-so-far value (its incumbent; NOT a measurement). The plot says so.
+    padded = [t + [t[-1]] * (max_len - len(t)) for t in traces]
+    mean = [statistics.fmean(col) for col in zip(*padded)]
+    se = [(statistics.stdev(col) / math.sqrt(n_runs)) if n_runs > 1 else 0.0 for col in zip(*padded)]
     return {
+        "mean": mean, "se": se, "final_mean": mean[-1], "final_se": se[-1],
         "n_runs": n_runs,
         "seeds": sorted(runs),
         "traces": traces,
@@ -121,30 +134,51 @@ def _plt():
     return plt
 
 
-def render_figure(group: str, series: dict[str, dict]):
-    """One benchmark: faint line per seed, bold median, shaded 25-75% band, log y-axis."""
+def render_figure(group: str, series: dict[str, dict], stat: str = "mean", title: str | None = None):
+    """One benchmark, faint line per seed. stat="mean": bold mean with a +-1 standard-error band on a linear
+    axis (early-stopped runs carried forward) and a dotted "median stop" line for backends that ended early.
+    stat="median": bold median with a 25-75% band on a log axis, early-stopped runs not padded."""
     plt = _plt()
-    fig, ax = plt.subplots(figsize=(9, 4.8), dpi=110)
+    fig, ax = plt.subplots(figsize=(9, 5.0), dpi=110)
+    n_max = max(s["evals_max"] for s in series.values())
     for k, (label, s) in enumerate(series.items()):
         color = COLORS[k % len(COLORS)]
-        for t in s["traces"]:  # every seed; NOT padded past where the run ended
-            ax.plot(range(1, len(t) + 1), [max(v, REGRET_FLOOR) for v in t], color=color, lw=0.9, alpha=0.25)
-        m = len(s["median"])
-        if m:
-            xs = range(1, m + 1)
-            ax.fill_between(xs, [max(v, REGRET_FLOOR) for v in s["lo"]], [max(v, REGRET_FLOOR) for v in s["hi"]],
-                            color=color, alpha=0.18, linewidth=0)
-            ax.plot(xs, [max(v, REGRET_FLOOR) for v in s["median"]], color=color, lw=2.4,
-                    label=f"{label} (n={s['n_runs']})")
+        floor = REGRET_FLOOR if stat == "median" else 0.0
+        for t in s["traces"]:  # every seed, drawn only where it was actually measured
+            ax.plot(range(1, len(t) + 1), [max(v, floor) for v in t], color=color, lw=0.9, alpha=0.22)
+        if stat == "mean":
+            xs = range(1, len(s["mean"]) + 1)
+            lo = [max(m - e, 0.0) for m, e in zip(s["mean"], s["se"])]
+            hi = [m + e for m, e in zip(s["mean"], s["se"])]
+            ax.fill_between(xs, lo, hi, color=color, alpha=0.2, linewidth=0)
+            ax.plot(xs, s["mean"], color=color, lw=2.6, label=f"{label} (n={s['n_runs']} seeds)")
+            if s["evals_median"] < n_max:
+                ax.axvline(s["evals_median"], color=color, ls=":", lw=1.2)
+                ax.annotate(f"median stop\n@{s['evals_median']:g}", (s["evals_median"], 1.0),
+                            xycoords=("data", "axes fraction"), xytext=(4, -4), textcoords="offset points",
+                            va="top", fontsize=8, color=color)
         else:
-            ax.plot([], [], color=color, lw=2.4, label=f"{label} (n={s['n_runs']})")
-    ax.set_yscale("log")
+            m = len(s["median"])
+            xs = range(1, m + 1)
+            if m:
+                ax.fill_between(xs, [max(v, floor) for v in s["lo"]], [max(v, floor) for v in s["hi"]],
+                                color=color, alpha=0.18, linewidth=0)
+            ax.plot(xs, [max(v, floor) for v in s["median"]], color=color, lw=2.4, label=f"{label} (n={s['n_runs']})")
+    if stat == "median":
+        ax.set_yscale("log")
+    else:
+        ax.set_ylim(bottom=0)
+    ax.set_xlim(1, n_max)
     ax.set_xlabel("evaluations")
-    ax.set_ylabel("best regret so far (log)")
-    ax.set_title(group)
+    ax.set_ylabel("best regret so far" + (" (log)" if stat == "median" else " (lower is better)"))
+    ax.set_title(title or (f"{group}: mean ± 1 standard error across seeds" if stat == "mean"
+                           else f"{group}: median and 25-75% across seeds"))
     ax.grid(True, which="major", alpha=0.25)
     ax.legend(loc="upper right", fontsize=9, framealpha=0.85)
-    fig.tight_layout()
+    foot = ("Thin lines = individual seeds. Runs that stopped early are carried forward at their last best value (not measured)."
+            if stat == "mean" else "Thin lines = individual seeds. Runs that ended early are not padded.")
+    fig.text(0.01, 0.01, foot, fontsize=7.5, alpha=0.7)
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
     return fig
 
 
@@ -160,7 +194,7 @@ def _fmt(v: float) -> str:
 
 
 def build_html(merged: dict[str, dict[str, dict[int, list[float]]]], title: str,
-               fig_dir: Path | None = None) -> tuple[str, dict]:
+               fig_dir: Path | None = None, stat: str = "mean") -> tuple[str, dict]:
     """Returns (html, summary-json-able dict). With `fig_dir`, also writes <fig_dir>/<group>.png."""
     summary: dict = {}
     sections, overview_rows = [], []
@@ -168,41 +202,46 @@ def build_html(merged: dict[str, dict[str, dict[int, list[float]]]], title: str,
         series = {label: aggregate(runs) for label, runs in backends.items()}
         summary[group] = {
             label: {k: s[k] for k in ("n_runs", "seeds", "n_full_budget", "evals_median",
-                                      "final_median", "final_q25", "final_q75")}
+                                      "final_median", "final_q25", "final_q75", "final_mean", "final_se")}
             for label, s in series.items()
         }
-        png = _png_bytes(render_figure(group, series))
+        png = _png_bytes(render_figure(group, series, stat=stat))
         if fig_dir is not None:
             fig_dir.mkdir(parents=True, exist_ok=True)
             (fig_dir / f"{group}.png").write_bytes(png)
         img = f'<img alt="{html.escape(group)}" src="data:image/png;base64,{base64.b64encode(png).decode()}">'
         rows = "".join(
             f"<tr><td>{html.escape(label)}</td><td>{s['n_runs']}</td><td>{s['n_full_budget']}/{s['n_runs']}</td>"
-            f"<td>{_fmt(s['evals_median'])}</td><td>{_fmt(s['final_median'])}</td>"
-            f"<td>{_fmt(s['final_q25'])} &ndash; {_fmt(s['final_q75'])}</td></tr>"
+            f"<td>{_fmt(s['evals_median'])}</td><td>{_fmt(s['final_mean'])} &plusmn; {_fmt(s['final_se'])}</td>"
+            f"<td>{_fmt(s['final_median'])} ({_fmt(s['final_q25'])} &ndash; {_fmt(s['final_q75'])})</td></tr>"
             for label, s in series.items()
         )
         sections.append(
             f"<h2>{html.escape(group)}</h2>{img}"
             f"<table><tr><th>backend</th><th>runs</th><th>full budget</th><th>median evals</th>"
-            f"<th>final regret (median)</th><th>25&ndash;75%</th></tr>{rows}</table>"
+            f"<th>final regret, mean &plusmn; SE</th><th>final regret, median (25&ndash;75%)</th></tr>{rows}</table>"
         )
-        overview_rows.append((group, min(series, key=lambda b: series[b]["final_median"]), series))
+        overview_rows.append((group, min(series, key=lambda b: series[b]["final_mean" if stat == "mean" else "final_median"]), series))
     labels = sorted({b for g in merged.values() for b in g})
     overview = ""
     if merged:
         head = "".join(f"<th>{html.escape(b)}</th>" for b in labels)
         body = "".join(
             f"<tr><td>{html.escape(g)}</td>"
-            + "".join(f"<td>{_fmt(sr[b]['final_median'])} (n={sr[b]['n_runs']})</td>" if b in sr else "<td></td>" for b in labels)
+            + "".join(f"<td>{_fmt(sr[b]['final_mean'] if stat == 'mean' else sr[b]['final_median'])} (n={sr[b]['n_runs']})</td>" if b in sr else "<td></td>" for b in labels)
             + f"<td>{html.escape(best)}</td></tr>"
             for g, best, sr in overview_rows
         )
-        overview = (f"<h2>Overview: final best regret, median over seeds (lower is better)</h2>"
-                    f"<table><tr><th>benchmark</th>{head}<th>lowest median</th></tr>{body}</table>")
-    note = ("<p class=note>Faint lines: individual seeds. Solid line: median across seeds. Shaded: 25&ndash;75% band. "
-            "Runs that ended early are not padded; the median/band is drawn only while at least half the runs reached "
-            "that evaluation. Few seeds means wide uncertainty: read the band, not just the line.</p>")
+        overview = (f"<h2>Overview: final best regret, {'mean' if stat == 'mean' else 'median'} over seeds (lower is better)</h2>"
+                    f"<table><tr><th>benchmark</th>{head}<th>lowest</th></tr>{body}</table>")
+    note = ("<p class=note>Faint lines: individual seeds. "
+            + ("Bold line: mean across seeds; band: &plusmn;1 standard error of the mean (SE = sd/&radic;n). Runs that stopped "
+               "early are carried forward at their last best value, so the late part of an early-stopping backend is "
+               "extrapolated, not measured; the dotted line marks the median stopping point. "
+               if stat == "mean" else
+               "Bold line: median across seeds; band: 25&ndash;75%. Runs that ended early are not padded; the median/band "
+               "is drawn only while at least half the runs reached that evaluation. ")
+            + "Few seeds means wide uncertainty: read the band, not just the line.</p>")
     page = f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>{html.escape(title)}</title>
 <style>
@@ -227,13 +266,18 @@ def main() -> None:
                     help="model root containing <benchmark>-<disclosure>/seed<N>/<backend>; repeat to overlay several")
     ap.add_argument("--out", default=None, help="output HTML (default: <first root>/seeds.html)")
     ap.add_argument("--title", default="Multi-seed comparison: best regret vs evaluations")
+    ap.add_argument("--stat", choices=("mean", "median"), default="mean",
+                    help="mean: mean +- 1 standard error (default); median: median and 25-75%% band, log axis")
+    ap.add_argument("--name", action="append", default=[], metavar="KEY=LABEL",
+                    help="display label for a root directory name (or 'vanilla'); repeatable")
     args = ap.parse_args()
     roots = [Path(r) for r in args.root]
     for r in roots:
         if not r.is_dir():
             ap.error(f"--root {r} is not a directory")
     out = Path(args.out) if args.out else roots[0] / "seeds.html"
-    page, summary = build_html(merge_roots(roots), args.title, fig_dir=out.with_suffix(""))
+    names = dict(n.split("=", 1) for n in args.name)
+    page, summary = build_html(merge_roots(roots, names), args.title, fig_dir=out.with_suffix(""), stat=args.stat)
     out.write_text(page)
     out.with_suffix(".json").write_text(json.dumps(summary, indent=2))
     print(f"Wrote {out}, {out.with_suffix('.json').name} and PNGs in {out.with_suffix('')}/ ({len(summary)} benchmark group(s))")

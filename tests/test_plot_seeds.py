@@ -1,5 +1,6 @@
 import json
 import math
+import statistics
 
 from benchmarks import plot_seeds
 from benchmarks.plot_seeds import aggregate, build_html, merge_roots, percentile
@@ -65,3 +66,33 @@ def test_build_html_renders_chart_table_and_summary(tmp_path):
     json.dumps(summary)  # serialisable
     empty_page, empty_summary = build_html({}, "t")
     assert "No scoreable runs" in empty_page and empty_summary == {}
+
+
+def test_aggregate_mean_and_standard_error_carry_early_stops_forward():
+    runs = {1: [4.0, 2.0], 2: [6.0, 4.0, 2.0], 3: [5.0, 3.0, 1.0]}  # run 1 stopped after 2 evaluations
+    a = aggregate(runs)
+    # at index 2 run 1 is carried forward at its last value 2.0
+    assert math.isclose(a["mean"][2], (2.0 + 2.0 + 1.0) / 3)
+    assert math.isclose(a["se"][2], statistics.stdev([2.0, 2.0, 1.0]) / math.sqrt(3))
+    assert a["final_mean"] == a["mean"][-1] and a["evals_median"] == 3
+    single = aggregate({1: [3.0, 2.0]})
+    assert single["se"] == [0.0, 0.0]  # one seed: no uncertainty estimate
+
+
+def test_mean_and_median_figures_render_with_median_stop_marker(tmp_path):
+    merged = {"h-blind": {
+        "vanilla": {s: [3.0 - 0.1 * i - 0.05 * s for i in range(10)] for s in (1, 2, 3)},
+        "agent": {s: [3.0 - 0.1 * i for i in range(4 + s)] for s in (1, 2, 3)},
+    }}
+    for stat in ("mean", "median"):
+        page, summary = build_html(merged, "t", fig_dir=tmp_path / stat, stat=stat)
+        assert (tmp_path / stat / "h-blind.png").stat().st_size > 1000
+        assert "&plusmn;" in page and summary["h-blind"]["agent"]["final_se"] >= 0
+    assert "carried forward" in build_html(merged, "t", stat="mean")[0]
+
+
+def test_merge_roots_display_names(tmp_path, monkeypatch):
+    monkeypatch.setattr(plot_seeds, "collect_runs", lambda root: {"g": {"vanilla": {1: [1.0]}, "sara-lenz": {1: [2.0]}}})
+    out = merge_roots([tmp_path / "fix", tmp_path / "nofix"],
+                      {"fix": "Agent, forced to continue", "nofix": "Agent, first stop", "vanilla": "Vanilla BO"})
+    assert set(out["g"]) == {"Vanilla BO", "Agent, forced to continue", "Agent, first stop"}
