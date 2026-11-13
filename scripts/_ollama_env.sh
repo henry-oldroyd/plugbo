@@ -1,7 +1,7 @@
 # Sourced by run_ollama_*.sh: points the standard run scripts at a local Ollama model
 # and runs preflight checks. Override with env vars:
 #   OLLAMA_MODEL=qwen2.5-coder:32b  OLLAMA_BASE_URL=http://host:11434/v1
-#   NEED_BOLT=1 (also require the BoLT extras)   SKIP_PREFLIGHT=1
+#   NEED_BOLT=1 (also require the BoLT extras)   SKIP_PREFLIGHT=1  NO_UNLOAD=1
 # Default model: on a >=40 GiB-VRAM box (e.g. 2x RTX 3090) use the int8 32B model that fits in VRAM
 # (see _gpu_profile.sh); otherwise keep the original single-GPU default.
 source "$(dirname "${BASH_SOURCE[0]}")/_gpu_profile.sh"
@@ -61,4 +61,6 @@ fi
 
 # Free VRAM when the script ends (success, error or Ctrl-C).
 _unload_model() { python3 -m llm.ollama_unload "$MODEL" "$BASE_URL" || true; }
-trap _unload_model EXIT
+# NO_UNLOAD=1: do not evict the model on exit (used by a parallel CPU-only job that must not
+# unload the model out from under a running agent).
+[ -n "${NO_UNLOAD:-}" ] || trap _unload_model EXIT
