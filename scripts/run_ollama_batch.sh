@@ -8,6 +8,8 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source scripts/_ollama_env.sh
+# Stop the agent from ending a run before the evaluation budget is used (see sara/agent.py).
+export SARA_ENFORCE_BUDGET="${SARA_ENFORCE_BUDGET-1}"
 OUT="${OUT:-results/logs/ollama-batch}"
 tag="${MODEL//[:\/]/_}"
 fail=0

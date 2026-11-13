@@ -17,6 +17,11 @@ from .tools import build_tools
 
 MAX_STEPS = 400  # safety cap on computational actions; the evaluation budget is self-regulated via the prompt
 BUDGET_NUDGE_FACTOR = 1.5
+# Opt-in (SARA_ENFORCE_BUDGET=1 or enforce_budget=True): if the model ends its turn with no tool
+# call (a "final report", or an empty completion) while the evaluation budget is not used up,
+# tell it to continue instead of ending the run. Off by default = original behaviour.
+ENFORCE_BUDGET = os.environ.get("SARA_ENFORCE_BUDGET", "0") != "0"
+MAX_REPROMPTS = 30  # cap on forced continuations per campaign, so a stuck model cannot loop forever
 
 VERBOSE = os.environ.get("SARA_VERBOSE", "0") != "0"
 
@@ -86,7 +91,11 @@ def run_campaign(
     budget: int | None = None,
     max_steps: int = MAX_STEPS,
     block_lenz: bool = False,
+    enforce_budget: bool | None = None,
 ) -> RunResult:
+    if enforce_budget is None:
+        enforce_budget = ENFORCE_BUDGET
+    reprompts = 0
     tools, handlers = build_tools(sandbox, block_lenz=block_lenz)
     history: list[Message] = [Message(role="user", content=user_prompt)]
     transcript: list[dict] = []
@@ -128,6 +137,22 @@ def run_campaign(
                 v = response.usage.get(f)
                 if v is not None:
                     usage_total[f] += v
+
+        if not response.tool_calls and enforce_budget and budget and reprompts < MAX_REPROMPTS:
+            n_done = _count_observed(sandbox)
+            if n_done is not None and n_done < budget:
+                reprompts += 1
+                if not (response.content or "").strip():
+                    history.pop()  # do not keep an empty assistant turn in the context
+                msg = (
+                    f"You have used {n_done} of {budget} evaluations; the budget is not exhausted, "
+                    "so do not give a final report yet. Continue the campaign: call a tool "
+                    "(e.g. `lenz suggest`, then evaluate and submit) and keep going."
+                )
+                history.append(Message(role="user", content=msg))
+                log({"role": "user", "content": msg, "forced_continuation": reprompts})
+                print(f"[agent] forced continuation {reprompts} at {n_done}/{budget} evals", file=sys.stderr, flush=True)
+                continue
 
         if not response.tool_calls:
             if VERBOSE:
