@@ -24,10 +24,9 @@ out = Path(sys.argv[2] if len(sys.argv) > 2 else "results/figures/regret_seed_di
 N = 50
 STYLE = {  # label, colour (reference palette slots 1-3), order
     "vanilla-no-LLM": ("Vanilla BO (no LLM)", "#2a78d6"),
-    "agent-first-stop": ("Agent, first stop (before fix)", "#1baf7a"),
-    "agent-forced-continue": ("Agent, forced to continue", "#eb6834"),
+    "agent-forced-continue": ("LLM agent (forced to use full budget)", "#eb6834"),
 }
-SHORT = {"agent-first-stop": "first-stop agent", "agent-forced-continue": "forced agent"}
+SHORT = {"agent-forced-continue": "forced agent"}
 INK, MUTED, BG = "#0b0b0b", "#52514e", "#fcfcfb"
 
 fig, ax = plt.subplots(figsize=(10, 5.8), dpi=150, facecolor=BG)
@@ -57,7 +56,7 @@ ax.set_xlim(1, N)
 ax.set_ylim(0, 3.3)
 ax.set_xlabel("Evaluations (7 shared Sobol warm-up points first)", color=MUTED)
 ax.set_ylabel("Best-so-far regret (lower is better)", color=MUTED)
-ax.set_title("Hartmann-6, qwen3.6:27b: regret across 5 seeds (mean ± 1 standard error)",
+ax.set_title("Hartmann-6, qwen3.6:27b: mean regret across seeds (± 1 standard error of the mean)",
              loc="left", color=INK, fontsize=12, fontweight="bold")
 ax.grid(axis="y", color="#e4e3df", lw=0.8)
 ax.tick_params(colors=MUTED)
@@ -65,7 +64,7 @@ for s in ("top", "right"):
     ax.spines[s].set_visible(False)
 for s in ("left", "bottom"):
     ax.spines[s].set_color("#c9c8c2")
-ax.legend(frameon=False, loc="upper right", bbox_to_anchor=(1, 0.93), labelcolor=INK)
+ax.legend(frameon=False, loc="lower left", bbox_to_anchor=(0.01, 0.02), labelcolor=INK)
 fig.text(0.01, 0.01, "Thin lines = individual seeds. Agent curves are held flat after the agent stopped (carried forward, not measured).",
          color=MUTED, fontsize=8)
 fig.tight_layout(rect=(0, 0.03, 1, 1))
