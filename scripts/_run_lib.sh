@@ -112,6 +112,20 @@ run_leg() {
           --context-variant "$CONTEXT_VARIANT"
       fi
       ;;
+    sara-lenz-free|sara-lenz-free-all|sara-lenz-free-hint)
+      # Agent may reconfigure lenz itself (acqf, surrogate incl. cake, bounds, objectives,
+      # constraints; "-all" also region/sampler/belief). Blind benchmarks only.
+      if [ "$disclosure" != "blind" ]; then
+        echo "error: $backend is only implemented for --disclosure blind" >&2
+        return 1
+      fi
+      local freedom=paper
+      [ "$backend" = "sara-lenz-free-all" ] && freedom=all
+      local hint_args=()
+      [ "$backend" = "sara-lenz-free-hint" ] && hint_args=(--hint vague)
+      skip_or_run "$out" "$label" python3 -m benchmarks.run_blind_test \
+        "${sara[@]}" --surrogate fixed --freedom "$freedom" "${hint_args[@]+"${hint_args[@]}"}" "${kernel_args[@]+"${kernel_args[@]}"}"
+      ;;
     sara-lenz-cake)
       if [ "$disclosure" = "blind" ]; then
         skip_or_run "$out" "$label" python3 -m benchmarks.run_blind_test \
@@ -160,7 +174,7 @@ run_leg() {
       fi
       ;;
     *)
-      echo "error: unknown backend '$backend' (vanilla, cake, turbo, sara-lenz, sara-lenz-cake, sara-only, sara-lenz-turbo, sara-lenz-pibo)" >&2
+      echo "error: unknown backend '$backend' (vanilla, cake, turbo, sara-lenz, sara-lenz-free, sara-lenz-free-all, sara-lenz-cake, sara-only, sara-lenz-turbo, sara-lenz-pibo)" >&2
       return 1
       ;;
   esac

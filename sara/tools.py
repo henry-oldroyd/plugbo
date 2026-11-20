@@ -10,7 +10,7 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
-BASH_TIMEOUT = 120
+BASH_TIMEOUT = int(os.environ.get("SARA_BASH_TIMEOUT", "120"))  # raise for CAKE/LLAMBO, which call an LLM inside lenz
 
 # Matches the lenz CLI, `python -m lenz`, and `import lenz` / `from lenz`.
 _LENZ_RE = re.compile(r"(?i)(?<![A-Za-z0-9_])lenz(?![A-Za-z0-9_])")

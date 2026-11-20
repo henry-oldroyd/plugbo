@@ -134,18 +134,78 @@ def _configure_pinned_slots(
         )
 
 
+# Optional vague, TRUE-but-generic background about the problem class (not its location or scale).
+# Hartmann-6 is smooth, deterministic and multimodal; nothing here names the function or its optimum.
+HINTS = {
+    "none": "",
+    "vague": (
+        "\n\nBackground hints (soft beliefs, not guarantees -- update them from the data): the function is "
+        "smooth and evaluated without noise, and it is multimodal: it has several local minima, so a "
+        "promising-looking region is not necessarily the global best."
+    ),
+}
+
+
+_FREEDOM_CORE = (
+    "- `set-acqf` (acquisition function: noisy_logei, logei, pi, ucb, sobol)\n"
+    "- `set-surrogate` (`fixed` Matern GP, or `cake`, which evolves the GP kernel with an LLM)\n"
+    "- `set-bounds` (narrow or widen the search region, within the original domain)\n"
+    "- `set-objectives` and `set-constraints`\n"
+)
+_FREEDOM_PLUGINS = (
+    "- `set-region` (`box` or `turbo` trust region)\n"
+    "- `set-sampler` (`botorch`, or `llambo`, where an LLM proposes candidates)\n"
+    "- `set-belief` (a prior over where the optimum is, via pi-BO)\n"
+)
+
+
+def _free_directive(n_warmup: int, budget: int, create_args: list[str], freedom: str) -> str:
+    """Counterpart of `_backend_directive` for runs where the agent may reconfigure lenz."""
+    allowed = _FREEDOM_CORE + (_FREEDOM_PLUGINS if freedom == "all" else "")
+    forbidden = (
+        ""
+        if freedom == "all"
+        else "Do not use `set-region`, `set-sampler` or `set-belief` (not part of this experiment).\n"
+    )
+    if n_warmup > 0:
+        start = (
+            f"a lenz study already exists at `./state.json` with {n_warmup} Sobol warm-start "
+            f"evaluations already recorded (they count toward the budget of {budget}). "
+            "Do not call `lenz create` -- that would wipe the shared initial design. "
+            "Continue from the existing state. "
+        )
+    else:
+        start = f"when you call `lenz create`, pass `{' '.join(create_args)}` as the starting configuration. "
+    return (
+        "\n\nBackend configuration (this experiment lets you reconfigure the optimizer freely): "
+        + start
+        + "It starts with a Matern GP surrogate and the noisy_logei acquisition function, but these are only "
+        "defaults -- you are free to change any of the following whenever you judge it will help, and "
+        "reconfiguring never discards recorded trials:\n"
+        + allowed
+        + forbidden
+        + "Your final score is the best true value of `y` among your evaluations (minimized), so keep the "
+        "objective as minimizing `y` and keep every evaluation inside the original [0, 1] search space. "
+        "You cannot change what `./oracle` computes."
+    )
+
+
 def _backend_directive(
     n_warmup: int,
     budget: int,
     create_args: list[str],
     region: str | None = None,
     prior: dict | None = None,
+    freedom: str = "pinned",
 ) -> str:
     """Pins the backend configuration sara would otherwise choose herself,
     so `--surrogate`/`--acqf` are controlled experimental conditions rather
     than left to the agent's judgment (e.g. for a vanilla-vs-cake comparison
-    at fixed acquisition function).
+    at fixed acquisition function). `freedom` "paper" or "all" lifts that pin
+    (see `_free_directive`); the default "pinned" keeps the original behaviour.
     """
+    if freedom in ("paper", "all"):
+        return _free_directive(n_warmup, budget, create_args, freedom)
     flags = " ".join(create_args)
     pinned_verbs = ["`set-acqf`", "`set-surrogate`"]
     if region == "turbo":
@@ -198,6 +258,8 @@ def run_blind_test(
     extra_body: str | None = None,
     warmup: int | None = None,
     no_lenz: bool = False,
+    freedom: str = "pinned",
+    hint: str = "none",
 ) -> dict:
     built = build_sandbox(benchmark_name, root=root, seed=seed)
     sandbox: Path = built["sandbox"]
@@ -284,7 +346,8 @@ def run_blind_test(
             cake_override,
         )
         user_prompt = _user_prompt((sandbox / "context.md").read_text(), "./oracle", budget)
-        user_prompt += _backend_directive(already, budget, create_args, region=region, prior=prior)
+        user_prompt += _backend_directive(already, budget, create_args, region=region, prior=prior, freedom=freedom)
+        user_prompt += HINTS[hint]
         system_prompt = _system_prompt()
 
     parsed_extra_body = json.loads(extra_body) if extra_body else None
@@ -309,6 +372,8 @@ def run_blind_test(
         "seed": seed,
         "warmup": already,
         "no_lenz": no_lenz,
+        "freedom": freedom,
+        "hint": hint,
     }
     _write_meta(meta_path, meta)
 
@@ -376,6 +441,14 @@ def main() -> None:
     p.add_argument("--kernel-llm-extra-body", default=None, help="JSON object merged into the kernel LLM's request body, e.g. '{\"enable_thinking\": false}'")
     p.add_argument("--extra-body", default=None, help="JSON object merged into sara's own LLM request body, e.g. '{\"enable_thinking\": false}'")
     p.add_argument(
+        "--freedom",
+        default="pinned",
+        choices=["pinned", "paper", "all"],
+        help="pinned: surrogate/acqf fixed by instruction (default). paper: agent may change acqf, surrogate "
+        "(incl. cake), bounds, objectives, constraints. all: also region, sampler, belief plugins.",
+    )
+    p.add_argument("--hint", default="none", choices=sorted(HINTS), help="optional vague, true background hint added to the agent's task text")
+    p.add_argument(
         "--no-lenz",
         action="store_true",
         help="pure LLM optimizer: Sara proposes every point; lenz is not created and cannot be called",
@@ -408,6 +481,8 @@ def main() -> None:
         extra_body=args.extra_body,
         warmup=args.warmup,
         no_lenz=args.no_lenz,
+        freedom=args.freedom,
+        hint=args.hint,
     )
 
     print("\n=== Blind test result ===")
