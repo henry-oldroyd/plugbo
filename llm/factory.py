@@ -29,5 +29,5 @@ def get_client(
             raise ProviderError("--base-url is required for provider 'openai-compatible'")
         return OpenAIClient(model=model, api_key=api_key, base_url=base_url, timeout=timeout, extra_body=extra_body)
     if provider == "ollama":
-        return OllamaClient(model=model, base_url=base_url, timeout=timeout)
+        return OllamaClient(model=model, base_url=base_url, timeout=timeout, extra_body=extra_body)
     raise ProviderError(f"unknown provider '{provider}' (expected one of {sorted(PROVIDERS)})")
