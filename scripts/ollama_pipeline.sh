@@ -17,6 +17,11 @@
 #   --budget N         [BUDGET]            default 50
 #   --skip-smoke, --no-viz
 #   --smoke-only       restart Ollama, pull, run only the smoke test, then stop (no batch)
+#   --enforce-budget / --no-enforce-budget   [SARA_ENFORCE_BUDGET=1|0]
+#                      Early-stopping override for the sara-lenz agent (sara/agent.py). The agent used
+#                      to end runs at ~7-17 of 50 evaluations; with enforcement on (the default for these
+#                      scripts, set in run_ollama_batch.sh) it is told to continue until the budget is
+#                      used, at most 30 times per run. --no-enforce-budget restores the old behaviour.
 #
 # Default model is chosen from the detected GPUs (scripts/_gpu_profile.sh):
 #   >= 40 GiB total VRAM (e.g. 2x RTX 3090): deepseek-r1:32b-qwen-distill-q8_0, i.e. Qwen2.5-32B
@@ -58,7 +63,9 @@ while [ $# -gt 0 ]; do
     --skip-smoke)  SKIP_SMOKE=1; shift ;;
     --no-viz)      NO_VIZ=1; shift ;;
     --smoke-only)  SMOKE_ONLY=1; shift ;;
-    -h|--help)     sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 0 ;;
+    --enforce-budget)    export SARA_ENFORCE_BUDGET=1; shift ;;
+    --no-enforce-budget) export SARA_ENFORCE_BUDGET=0; shift ;;
+    -h|--help)    sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 0 ;;
     *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
 done

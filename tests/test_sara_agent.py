@@ -229,3 +229,204 @@ def test_bash_tool_runs_in_sandbox(tmp_path):
     _, handlers = build_tools(tmp_path)
     out = handlers["bash"]("pwd")
     assert str(tmp_path.resolve()) in out
+
+
+# --- early-stopping override (SARA_ENFORCE_BUDGET / enforce_budget) -------------------------------------
+
+
+def _write_observed(sandbox, n):
+    (sandbox / "state.json").write_text(json.dumps({"trials": [{"status": "observed"} for _ in range(n)]}))
+
+
+def _final(text="final report"):
+    return ChatResponse(content=text, tool_calls=[], stop_reason="end_turn")
+
+
+def test_budget_not_enforced_by_default_agent_may_stop_early(tmp_path, monkeypatch):
+    import sara.agent as agent
+
+    monkeypatch.setattr(agent, "ENFORCE_BUDGET", False)
+    _write_observed(tmp_path, 3)
+    client = ScriptedClient([_final()])
+    result = run_campaign(client, system_prompt="sys", user_prompt="go", sandbox=tmp_path, budget=10)
+    assert client.calls == 1
+    assert result.final_message == "final report"
+    assert not any("forced_continuation" in e for e in result.transcript)
+
+
+def test_enforce_budget_pushes_agent_on_until_cap(tmp_path, monkeypatch):
+    import sara.agent as agent
+
+    monkeypatch.setattr(agent, "MAX_REPROMPTS", 2)
+    _write_observed(tmp_path, 3)  # 3 of 10 used, and the scripted model never evaluates anything
+    client = ScriptedClient([_final("early 1"), _final("early 2"), _final("early 3")])
+    result = run_campaign(client, system_prompt="sys", user_prompt="go", sandbox=tmp_path, budget=10, enforce_budget=True)
+
+    forced = [e for e in result.transcript if "forced_continuation" in e]
+    assert len(forced) == 2  # capped, so a stuck model cannot loop forever
+    assert "3 of 10 evaluations" in forced[0]["content"]
+    assert client.calls == 3
+    assert result.final_message == "early 3"  # after the cap the run is allowed to end
+
+
+def test_enforce_budget_run_completes_once_budget_is_used(tmp_path):
+    state = tmp_path / "state.json"
+
+    class Client(LLMClient):
+        def __init__(self):
+            super().__init__(model="scripted")
+            self.calls = 0
+
+        def chat(self, messages, tools, system):
+            self.calls += 1
+            if self.calls == 1:  # model gives up with 1/3 evaluations done
+                return _final("I am done")
+            if self.calls == 2:  # after being told to continue it evaluates the rest
+                state.write_text(json.dumps({"trials": [{"status": "observed"} for _ in range(3)]}))
+                return ChatResponse(
+                    content="", tool_calls=[ToolCall(id="1", name="bash", arguments={"cmd": "echo ok"})], stop_reason="tool_use"
+                )
+            return _final("all done")
+
+    _write_observed(tmp_path, 1)
+    client = Client()
+    result = run_campaign(client, system_prompt="sys", user_prompt="go", sandbox=tmp_path, budget=3, enforce_budget=True)
+    assert client.calls == 3
+    assert result.final_message == "all done"
+    assert len([e for e in result.transcript if "forced_continuation" in e]) == 1
+
+
+def test_enforce_budget_lets_agent_finish_when_budget_is_spent(tmp_path):
+    _write_observed(tmp_path, 10)
+    client = ScriptedClient([_final()])
+    result = run_campaign(client, system_prompt="sys", user_prompt="go", sandbox=tmp_path, budget=10, enforce_budget=True)
+    assert client.calls == 1
+    assert not any("forced_continuation" in e for e in result.transcript)
+
+
+def test_explicit_enforce_budget_argument_overrides_environment_default(tmp_path, monkeypatch):
+    import sara.agent as agent
+
+    monkeypatch.setattr(agent, "ENFORCE_BUDGET", True)  # what SARA_ENFORCE_BUDGET=1 sets
+    monkeypatch.setattr(agent, "MAX_REPROMPTS", 1)
+    _write_observed(tmp_path, 2)
+
+    on = run_campaign(ScriptedClient([_final(), _final()]), system_prompt="s", user_prompt="g", sandbox=tmp_path, budget=5)
+    assert len([e for e in on.transcript if "forced_continuation" in e]) == 1  # env default applied
+
+    off = ScriptedClient([_final()])
+    run_campaign(off, system_prompt="s", user_prompt="g", sandbox=tmp_path, budget=5, enforce_budget=False)
+    assert off.calls == 1  # explicit False beats the env default
+
+
+# --- text-mode tool calls (SARA_TEXT_TOOLS / text_tools) --------------------------------------------------
+
+
+def test_extract_bash_block():
+    from sara.agent import extract_bash_block
+
+    assert extract_bash_block("run:\n```bash\nlenz status --state ./state.json\n```\nthen wait") == "lenz status --state ./state.json"
+    assert extract_bash_block("```\nlenz suggest --state ./state.json\n```") == "lenz suggest --state ./state.json"  # unlabelled, command-like
+    assert extract_bash_block("```\nsome output 1 2 3\n```") is None  # unlabelled prose/output
+    assert extract_bash_block("<think>try ```bash\nrm -rf x\n```</think>no command here") is None  # reasoning ignored
+    assert extract_bash_block("```bash\nfirst\n```\n```bash\nsecond\n```") == "first"  # only the first block
+    assert extract_bash_block("") is None and extract_bash_block("plain text") is None
+
+
+def test_text_tools_runs_fenced_command_as_bash_call(tmp_path):
+    responses = [
+        ChatResponse(content="Let me check.\n```bash\necho hello-from-text\n```", tool_calls=[], stop_reason="end_turn"),
+        ChatResponse(content="done", tool_calls=[], stop_reason="end_turn"),
+    ]
+    client = ScriptedClient(responses)
+    result = run_campaign(client, system_prompt="s", user_prompt="g", sandbox=tmp_path, text_tools=True)
+    tool_entries = [e for e in result.transcript if e.get("role") == "tool"]
+    assert len(tool_entries) == 1 and "hello-from-text" in tool_entries[0]["content"]
+    assert result.final_message == "done" and client.calls == 2
+
+
+def test_text_tools_off_by_default_so_fenced_command_is_just_text(tmp_path, monkeypatch):
+    import sara.agent as agent
+
+    monkeypatch.setattr(agent, "TEXT_TOOLS", False)
+    client = ScriptedClient([ChatResponse(content="```bash\necho hi\n```", tool_calls=[], stop_reason="end_turn")])
+    result = run_campaign(client, system_prompt="s", user_prompt="g", sandbox=tmp_path)
+    assert client.calls == 1 and not [e for e in result.transcript if e.get("role") == "tool"]
+
+
+def test_text_tools_combines_with_budget_enforcement(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"trials": [{"status": "observed"} for _ in range(1)]}))
+    cmd = "python3 -c \"import json;json.dump({'trials':[{'status':'observed'}]*3},open('state.json','w'))\""
+    responses = [
+        ChatResponse(content="I will start:\n```bash\n" + cmd + "\n```", tool_calls=[], stop_reason="end_turn"),
+        ChatResponse(content="all done", tool_calls=[], stop_reason="end_turn"),
+    ]
+    client = ScriptedClient(responses)
+    result = run_campaign(client, system_prompt="s", user_prompt="g", sandbox=tmp_path, budget=3,
+                          enforce_budget=True, text_tools=True)
+    assert client.calls == 2 and result.final_message == "all done"
+    assert not [e for e in result.transcript if "forced_continuation" in e]  # the fenced command counted as action
+
+
+def test_extract_bash_blocks_returns_all_in_order_with_limit():
+    from sara.agent import extract_bash_blocks
+
+    text = "plan:\n```bash\nlenz status\n```\nthen\n```bash\nlenz suggest\n```\nthen\n```bash\nlenz submit\n```"
+    assert extract_bash_blocks(text) == ["lenz status", "lenz suggest", "lenz submit"]
+    assert extract_bash_blocks(text, limit=2) == ["lenz status", "lenz suggest"]
+    assert extract_bash_blocks("<think>```bash\nx\n```</think>") == []
+
+
+def test_text_tools_all_runs_every_block_and_drops_prose_from_history(tmp_path, monkeypatch):
+    import sara.agent as agent
+
+    monkeypatch.setattr(agent, "TEXT_TOOLS_ALL", True)
+    seen = {}
+
+    class Client(LLMClient):
+        def __init__(self):
+            super().__init__(model="scripted")
+            self.calls = 0
+
+        def chat(self, messages, tools, system):
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(
+                    content="Long rambling plan. " * 50 + "\n```bash\necho one\n```\n```bash\necho two\n```",
+                    tool_calls=[], stop_reason="end_turn")
+            seen["assistant_in_history"] = [m for m in messages if m.role == "assistant"]
+            return ChatResponse(content="done", tool_calls=[], stop_reason="end_turn")
+
+    result = run_campaign(Client(), system_prompt="s", user_prompt="g", sandbox=tmp_path, text_tools=True)
+    tool_out = [e["content"] for e in result.transcript if e.get("role") == "tool"]
+    assert len(tool_out) == 2 and "one" in tool_out[0] and "two" in tool_out[1]
+    prev = seen["assistant_in_history"][0]
+    assert prev.content == "" and len(prev.tool_calls) == 2       # the rambling is not sent back to the model
+    raw = [e for e in result.transcript if e.get("raw_content")]
+    assert raw and "Long rambling plan." in raw[0]["raw_content"]  # but it is kept in the trace
+
+
+def test_text_tools_truncates_long_reply_with_no_command(tmp_path):
+    import sara.agent as agent
+
+    seen = {}
+
+    class Client(LLMClient):
+        def __init__(self):
+            super().__init__(model="scripted")
+            self.calls = 0
+
+        def chat(self, messages, tools, system):
+            self.calls += 1
+            if self.calls == 1:
+                return ChatResponse(content="x" * 5000, tool_calls=[], stop_reason="end_turn")
+            return ChatResponse(content="done", tool_calls=[], stop_reason="end_turn")
+
+    c = Client()
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"trials": [{"status": "observed"}]}))
+    result = run_campaign(c, system_prompt="s", user_prompt="g", sandbox=tmp_path, budget=5,
+                          enforce_budget=True, text_tools=True)
+    first = [e for e in result.transcript if e.get("role") == "assistant"][0]
+    assert len(first["content"]) <= agent.HISTORY_PROSE_CHARS + 10 and len(first["raw_content"]) == 5000

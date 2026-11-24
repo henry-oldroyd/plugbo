@@ -2,6 +2,10 @@
 .SYNOPSIS
   Re-run the LLM-agent (sara-lenz) experiments only, forcing the agent to use the whole budget.
   Runs in the foreground: Ctrl+C aborts. Finished runs are skipped, so rerunning resumes.
+  Windows only; on Linux/macOS use ./scripts/ollama_agent_rerun.sh. The model defaults to the one that
+  fits the detected GPUs (2x RTX 3090 -> deepseek-r1:32b-qwen-distill-q8_0, one 4090 -> qwen3.6:27b).
+  Assumes `ollama serve` is already running with the settings you want (context, KV cache); use
+  ollama_pipeline.ps1 if you want it restarted for you.
 
 .EXAMPLE
   .\scripts\ollama_agent_rerun.ps1
@@ -10,7 +14,7 @@
   .\scripts\ollama_agent_rerun.ps1 -NoEnforce    # old behaviour: agent may end the run early
 #>
 param(
-  [string]$Model = "qwen3.6:27b",
+  [string]$Model = "",                 # empty = pick from the detected GPUs (scripts/_gpu_profile.ps1)
   [int[]]$Seeds = @(42, 43, 44, 45, 46),
   [string[]]$Benches = @("hartmann6"),
   [string[]]$Disclosures = @("blind"),
@@ -23,6 +27,9 @@ $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
 $bash = "C:\Program Files\Git\bin\bash.exe"
 if (-not (Test-Path $bash)) { throw "Git Bash not found at $bash" }
+
+. "$PSScriptRoot\_gpu_profile.ps1"
+if (-not $Model) { $Model = (Get-GpuProfile).Model }
 
 $env:OLLAMA_MODEL      = $Model
 $env:SEEDS             = $Seeds -join " "

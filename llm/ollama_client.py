@@ -10,6 +10,8 @@ DEFAULT_BASE_URL = "http://localhost:11434/v1"
 
 
 class OllamaClient(OpenAIClient):
-    def __init__(self, model: str, base_url: str | None = None, timeout: float | None = None):
+    def __init__(self, model: str, base_url: str | None = None, timeout: float | None = None,
+                 extra_body: dict | None = None):
         resolved = base_url or os.environ.get("OLLAMA_BASE_URL") or DEFAULT_BASE_URL
-        super().__init__(model=model, api_key="ollama", base_url=resolved, timeout=timeout)
+        super().__init__(model=model, api_key="ollama", base_url=resolved, timeout=timeout,
+                         extra_body=extra_body)
